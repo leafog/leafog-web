@@ -1,5 +1,7 @@
 import { PostgrestClient } from "@supabase/postgrest-js";
 import Keycloak from "keycloak-js";
+
+import { S3Client } from "@aws-sdk/client-s3";
 type Json =
   | string
   | number
@@ -55,22 +57,27 @@ interface Auth {
   };
 }
 
-export type LeafogConfig = {
+export type LeafogConfig<
+  T = any,
+  SchemaName extends string & keyof T = "public" extends keyof T
+    ? "public"
+    : string & keyof T
+> = {
   url: string;
   projectId: string;
   s3Endpoint: string;
-  schema?: string;
+  schema?: SchemaName;
 };
-import { S3Client } from "@aws-sdk/client-s3";
 
 const EX_CHANGE_BODY = {
   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
   audience: "minio",
   requested_token_type: "urn:ietf:params:oauth:token-type:access_token",
 };
-export class Leafog<T> {
+const KC_REALM_NAME = "leafog";
+export class Leafog<T = any> {
   #xmlParse = new DOMParser();
-  #config: LeafogConfig;
+  #config: LeafogConfig<T>;
   #kc: Keycloak;
   #withAuthFetch: typeof fetch = (...args) => {
     const authHeader: HeadersInit = this.#kc.token
@@ -99,23 +106,25 @@ export class Leafog<T> {
 
   s3Client: S3Client;
 
-  constructor(config: LeafogConfig) {
+  constructor(config: LeafogConfig<T>) {
     this.#config = config;
     const { url, projectId } = config;
     this.#kc = new Keycloak({
       url: `${url}/auth`,
-      realm: "Leafog",
+      realm: KC_REALM_NAME,
       clientId: projectId,
     });
 
     this.auth = {
       kc: this.#kc,
       rest: new PostgrestClient<Auth>(`${url}/pgrst`, {
+        schema: "auth",
         fetch: this.#withAuthFetch,
       }),
     };
 
     this.rest = new PostgrestClient<T>(`${url}/pgrst`, {
+      schema: this.#config.schema,
       fetch: this.#withAuthFetch,
     });
     this.s3Client = this.#initS3Client();
@@ -142,7 +151,11 @@ export class Leafog<T> {
     });
   };
   #exChangeTokenWithKc = () => {
-    if (this.#kc.authenticated && this.#kc.token) {
+    if (
+      this.#kc.authenticated &&
+      this.#kc.token &&
+      this.#kc.idTokenParsed?.minio_policy
+    ) {
       this.#exChangeToken(this.#kc.token);
     }
   };
@@ -157,7 +170,9 @@ export class Leafog<T> {
     });
 
     fetch(
-      `${this.#config.url}/auth/realms/Leafog/protocol/openid-connect/token`,
+      `${
+        this.#config.url
+      }/auth/realms/${KC_REALM_NAME}/protocol/openid-connect/token`,
       {
         method: "post",
         headers: {
@@ -176,12 +191,14 @@ export class Leafog<T> {
       endpoint: `${this.#config.s3Endpoint}`,
       region: "us-east-1",
       serviceId: "s3",
+      forcePathStyle: true,
       credentials: async () => {
         return (
           this.#s3cert ?? {
             accessKeyId: "",
             secretAccessKey: "",
             sessionToken: "",
+            expiration: new Date(0),
           }
         );
       },
@@ -192,7 +209,6 @@ export class Leafog<T> {
     minioTokenUrl.searchParams.append("Action", "AssumeRoleWithClientGrants");
     minioTokenUrl.searchParams.append("Version", "2011-06-15");
     minioTokenUrl.searchParams.append("Token", minioToken);
-    minioTokenUrl.searchParams.append("Leafog-server", "minio");
 
     fetch(minioTokenUrl, {
       method: "post",
@@ -200,14 +216,20 @@ export class Leafog<T> {
       .then((res) => res.text())
       .then((res: string) => {
         const xml = this.#xmlParse.parseFromString(res, "text/xml");
-        const accessKeyId =
-          xml.getElementsByTagName("AccessKeyId")[0].innerHTML;
+        const errorMsg = xml.querySelector(
+          "ErrorResponse Error Message"
+        )?.innerHTML;
+        if (errorMsg) {
+          throw new Error(errorMsg);
+        }
+        const accessKeyId = xml.querySelector("AccessKeyId")?.innerHTML ?? "";
+
         const secretAccessKey =
-          xml.getElementsByTagName("SecretAccessKey")[0].innerHTML;
-        const sessionToken =
-          xml.getElementsByTagName("SessionToken")[0].innerHTML;
+          xml.querySelector("SecretAccessKey")?.innerHTML ?? "";
+        const sessionToken = xml.querySelector("SessionToken")?.innerHTML ?? "";
+
         const expiration = new Date(
-          xml.getElementsByTagName("Expiration")[0].innerHTML
+          xml.querySelector("Expiration")?.innerHTML ?? 0
         );
         return { accessKeyId, secretAccessKey, sessionToken, expiration };
       })

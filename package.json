@@ -1,19 +1,18 @@
 {
   "name": "leafog-web",
   "private": false,
-  "version": "0.0.0",
+  "version": "0.0.1",
   "type": "module",
   "files": [
-    "dist",
-    "index.d.ts"
+    "dist"
   ],
-  "main": "./dist/counter.umd.cjs",
-  "module": "./dist/counter.js",
-  "types": "./index.d.ts",
+  "main": "./dist/leafog.umd.cjs",
+  "module": "./dist/leafog.js",
+  "types": "./main.d.ts",
   "exports": {
-    "types": "./index.d.ts",
-    "import": "./dist/counter.js",
-    "require": "./dist/counter.umd.cjs"
+    "types": "./dist/main.d.ts",
+    "import": "./dist/leafog.js",
+    "require": "./dist/leafog.umd.cjs"
   },
   "scripts": {
     "dev": "vite",
@@ -23,6 +22,11 @@
     "typescript": "^5.2.2",
     "vite": "^5.0.0",
     "vite-plugin-dts": "^3.6.4"
+  },
+  "peerDependencies": {
+    "@aws-sdk/client-s3": "^3.474.0",
+    "@supabase/postgrest-js": "^1.9.0",
+    "keycloak-js": "23.0.3"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.474.0",
